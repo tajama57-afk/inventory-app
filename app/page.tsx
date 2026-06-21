@@ -64,10 +64,16 @@ type TransactionRow = {
   user_name: string | null;
   memo: string | null;
   created_at: string;
-  products: {
-    code: string | null;
-    name: string | null;
-  } | null;
+  products:
+    | {
+        code: string | null;
+        name: string | null;
+      }
+    | {
+        code: string | null;
+        name: string | null;
+      }[]
+    | null;
 };
 
 type StockTransaction = {
@@ -160,11 +166,14 @@ function formatDateTime(value: string) {
 
 function toTransaction(row: TransactionRow): StockTransaction {
   const mode = (row.transaction_type ?? row.type) === "out" ? "out" : "in";
+  const productInfo = Array.isArray(row.products)
+    ? row.products[0]
+    : row.products;
 
   return {
     id: row.id,
-    productCode: row.products?.code ?? "",
-    productName: row.products?.name ?? "",
+    productCode: productInfo?.code ?? "",
+    productName: productInfo?.name ?? "",
     mode,
     quantity: row.quantity ?? row.qty ?? 0,
     userName: row.user_name ?? "",
@@ -1197,6 +1206,7 @@ export default function HomePage() {
                     product={product}
                     onStockAction={openStockDialog}
                     onEdit={openEditDialog}
+                    onDelete={handleDeleteProduct}
                   />
                 ))}
               </div>
