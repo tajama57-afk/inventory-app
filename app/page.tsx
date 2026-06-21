@@ -960,7 +960,36 @@ export default function HomePage() {
           </div>
         )}
 
-        <section aria-label="サマリー">
+       <section className="mt-6 sm:mt-8" aria-label="商品検索">
+          <label htmlFor="search" className="sr-only">
+            商品を検索
+          </label>
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+              />
+            </svg>
+            <input
+              id="search"
+              type="search"
+              placeholder="品番・商品名で検索..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="w-full rounded-2xl border border-blue-200 bg-white py-3.5 pl-12 pr-4 text-sm text-slate-800 shadow-sm shadow-blue-100/50 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:text-base"
+            />
+          </div>
+        </section>
+ <section aria-label="サマリー">
           <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             <StatCard
               label="商品数"
@@ -1136,36 +1165,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="mt-6 sm:mt-8" aria-label="商品検索">
-          <label htmlFor="search" className="sr-only">
-            商品を検索
-          </label>
-          <div className="relative">
-            <svg
-              className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              aria-hidden
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-              />
-            </svg>
-            <input
-              id="search"
-              type="search"
-              placeholder="品番・商品名で検索..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="w-full rounded-2xl border border-blue-200 bg-white py-3.5 pl-12 pr-4 text-sm text-slate-800 shadow-sm shadow-blue-100/50 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:text-base"
-            />
-          </div>
-        </section>
-
+        
         <section className="mt-6 sm:mt-8" aria-label="商品一覧">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
