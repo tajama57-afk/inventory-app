@@ -1165,8 +1165,17 @@ export default function HomePage() {
           </div>
         </section>
 
-        
-        <section className="mt-6 sm:mt-8" aria-label="商品一覧">
+        <a
+  href="#product-list"
+  className="block rounded-xl bg-blue-600 text-white text-center py-3 mt-3"
+>
+  商品一覧へ
+</a>
+        <section
+  id="product-list"
+  className="mt-6 sm:mt-8"
+  aria-label="商品一覧"
+>
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-base font-bold text-blue-950 sm:text-lg">
