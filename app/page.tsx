@@ -13,6 +13,7 @@ type ProductRow = {
   id: string;
   code: string;
   name: string;
+  category: string | null;
   jodai: number;
   genka: number;
   stock: number;
@@ -26,6 +27,7 @@ type Product = {
   id: string;
   code: string;
   name: string;
+  category: string;
   stock: number;
   retailPrice: number;
   costPrice: number;
@@ -38,6 +40,7 @@ type Product = {
 
 type ProductForm = {
   name: string;
+  category: string;
   jodai: string;
   genka: string;
   stock: string;
@@ -87,6 +90,24 @@ type StockTransaction = {
   createdAt: string;
 };
 
+type CsvProductRow = {
+  lineNumber: number;
+  code: string;
+  name: string;
+  category: string;
+  stock: number;
+  unit: string;
+  retailPrice: number;
+  costPrice: number;
+  location: string;
+  notes: string;
+};
+
+type CsvParseResult = {
+  rows: CsvProductRow[];
+  errors: string[];
+};
+
 const IMAGE_COLORS = [
   "from-blue-100 to-blue-200",
   "from-sky-100 to-blue-300",
@@ -97,6 +118,7 @@ const IMAGE_COLORS = [
 
 const EMPTY_FORM: ProductForm = {
   name: "",
+  category: "",
   jodai: "",
   genka: "",
   stock: "",
@@ -117,6 +139,178 @@ function formatNumber(value: number) {
 
 function formatCurrency(value: number) {
   return `¥${formatNumber(value)}`;
+}
+
+function parseNumber(value: string, label: string, lineNumber: number) {
+  const normalized = value.replace(/,/g, "").trim();
+  const parsed = Number(normalized);
+
+  if (normalized === "" || Number.isNaN(parsed) || parsed < 0) {
+    throw new Error(`${lineNumber}行目: ${label}は0以上の数値で入力してください。`);
+  }
+
+  return parsed;
+}
+
+function parseInteger(value: string, label: string, lineNumber: number) {
+  const parsed = parseNumber(value, label, lineNumber);
+
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${lineNumber}行目: ${label}は整数で入力してください。`);
+  }
+
+  return parsed;
+}
+
+function parseCsvText(text: string): string[][] {
+  const rows: string[][] = [];
+  let current = "";
+  let row: string[] = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === "\"") {
+      if (inQuotes && nextChar === "\"") {
+        current += "\"";
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && nextChar === "\n") {
+        index += 1;
+      }
+      row.push(current);
+      rows.push(row);
+      row = [];
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current !== "" || row.length > 0) {
+    row.push(current);
+    rows.push(row);
+  }
+
+  return rows.filter((csvRow) => csvRow.some((cell) => cell.trim() !== ""));
+}
+
+function normalizeCsvHeader(value: string) {
+  return value.replace(/^\ufeff/, "").trim();
+}
+
+function parseProductCsv(text: string): CsvParseResult {
+  const csvRows = parseCsvText(text);
+  const errors: string[] = [];
+
+  if (csvRows.length === 0) {
+    return { rows: [], errors: ["CSVにデータがありません。"] };
+  }
+
+  const expectedHeaders = [
+    "品番",
+    "商品名",
+    "カテゴリー",
+    "在庫数",
+    "単位",
+    "上代",
+    "原価",
+    "保管場所",
+    "備考",
+  ];
+  const headers = csvRows[0].map(normalizeCsvHeader);
+
+  expectedHeaders.forEach((header, index) => {
+    if (headers[index] !== header) {
+      errors.push(`1行目: ${index + 1}列目は「${header}」にしてください。`);
+    }
+  });
+
+  if (errors.length > 0) {
+    return { rows: [], errors };
+  }
+
+  const rows: CsvProductRow[] = [];
+
+  csvRows.slice(1).forEach((csvRow, rowIndex) => {
+    const lineNumber = rowIndex + 2;
+
+    try {
+      const name = (csvRow[1] ?? "").trim();
+      if (!name) {
+        throw new Error(`${lineNumber}行目: 商品名を入力してください。`);
+      }
+
+      rows.push({
+        lineNumber,
+        code: (csvRow[0] ?? "").trim(),
+        name,
+        category: (csvRow[2] ?? "").trim(),
+        stock: parseInteger(csvRow[3] ?? "", "在庫数", lineNumber),
+        unit: (csvRow[4] ?? "").trim(),
+        retailPrice: parseNumber(csvRow[5] ?? "", "上代", lineNumber),
+        costPrice: parseNumber(csvRow[6] ?? "", "原価", lineNumber),
+        location: (csvRow[7] ?? "").trim(),
+        notes: (csvRow[8] ?? "").trim(),
+      });
+    } catch (csvError) {
+      errors.push(
+        csvError instanceof Error
+          ? csvError.message
+          : `${lineNumber}行目: 読み込みに失敗しました。`,
+      );
+    }
+  });
+
+  return { rows, errors };
+}
+
+async function readCsvFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const utf8Text = new TextDecoder("utf-8").decode(buffer);
+
+  if (!utf8Text.includes("\uFFFD")) {
+    return utf8Text.replace(/^\ufeff/, "");
+  }
+
+  try {
+    return new TextDecoder("shift_jis").decode(buffer).replace(/^\ufeff/, "");
+  } catch {
+    return utf8Text.replace(/^\ufeff/, "");
+  }
+}
+
+function buildNextCodeGenerator(existingCodes: string[]) {
+  const usedCodes = new Set(existingCodes);
+  let nextNumber = existingCodes.reduce((max, code) => {
+    const match = code.match(/^P(\d+)$/);
+    return match ? Math.max(max, Number.parseInt(match[1], 10)) : max;
+  }, 0);
+
+  return () => {
+    do {
+      nextNumber += 1;
+    } while (usedCodes.has(`P${String(nextNumber).padStart(4, "0")}`));
+
+    const nextCode = `P${String(nextNumber).padStart(4, "0")}`;
+    usedCodes.add(nextCode);
+    return nextCode;
+  };
 }
 
 
@@ -187,6 +381,7 @@ function toProduct(row: ProductRow, index: number): Product {
     id: row.id,
     code: row.code,
     name: row.name,
+    category: row.category ?? "",
     stock: row.stock,
     retailPrice: row.jodai,
     costPrice: row.genka,
@@ -301,11 +496,13 @@ function StockButtons({
 
 function ProductCard({
   product,
+  showCost,
   onStockAction,
   onEdit,
   onDelete,
 }: {
   product: Product;
+  showCost: boolean;
   onStockAction: (product: Product, mode: StockMode) => void;
   onEdit: (product: Product) => void;
   onDelete: (product: Product) => void;
@@ -322,6 +519,11 @@ function ProductCard({
           <h3 className="mt-0.5 truncate text-base font-bold text-slate-800">
             {product.name}
           </h3>
+          {product.category && (
+            <p className="mt-1 truncate text-xs font-medium text-slate-500">
+              {product.category}
+            </p>
+          )}
           <p className="mt-2 inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
             在庫 {formatNumber(product.stock)}
             {product.unit ? ` ${product.unit}` : " 点"}
@@ -335,12 +537,14 @@ function ProductCard({
             {formatCurrency(product.retailPrice)}
           </dd>
         </div>
-        <div>
-          <dt className="text-xs text-slate-500">原価</dt>
-          <dd className="mt-0.5 font-semibold tabular-nums text-slate-800">
-            {formatCurrency(product.costPrice)}
-          </dd>
-        </div>
+        {showCost && (
+          <div>
+            <dt className="text-xs text-slate-500">原価</dt>
+            <dd className="mt-0.5 font-semibold tabular-nums text-slate-800">
+              {formatCurrency(product.costPrice)}
+            </dd>
+          </div>
+        )}
         {product.location && (
           <div>
             <dt className="text-xs text-slate-500">保管場所</dt>
@@ -349,12 +553,14 @@ function ProductCard({
             </dd>
           </div>
         )}
-        <div>
-          <dt className="text-xs text-slate-500">原価在庫金額</dt>
-          <dd className="mt-0.5 font-semibold tabular-nums text-blue-800">
-            {formatCurrency(costInventory)}
-          </dd>
-        </div>
+        {showCost && (
+          <div>
+            <dt className="text-xs text-slate-500">原価在庫金額</dt>
+            <dd className="mt-0.5 font-semibold tabular-nums text-blue-800">
+              {formatCurrency(costInventory)}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className="text-xs text-slate-500">上代評価額</dt>
           <dd className="mt-0.5 font-semibold tabular-nums text-blue-800">
@@ -397,6 +603,8 @@ export default function HomePage() {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showCost, setShowCost] = useState(false);
+  const [csvImporting, setCsvImporting] = useState(false);
   const [stockMode, setStockMode] = useState<StockMode | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [stockForm, setStockForm] = useState<StockForm>(EMPTY_STOCK_FORM);
@@ -411,7 +619,7 @@ export default function HomePage() {
 
     const { data, error: fetchError } = await supabase
       .from("products")
-      .select("id, code, name, jodai, genka, stock, location, unit, notes, image_url")
+      .select("id, code, name, category, jodai, genka, stock, location, unit, notes, image_url")
       .order("code", { ascending: true });
 
     if (fetchError) {
@@ -486,7 +694,8 @@ export default function HomePage() {
     return products.filter(
       (product) =>
         product.code.toLowerCase().includes(normalized) ||
-        product.name.toLowerCase().includes(normalized),
+        product.name.toLowerCase().includes(normalized) ||
+        product.category.toLowerCase().includes(normalized),
     );
   }, [products, query]);
 
@@ -504,6 +713,7 @@ export default function HomePage() {
     setEditingProduct(product);
     setEditForm({
       name: product.name,
+      category: product.category,
       jodai: String(product.retailPrice),
       genka: String(product.costPrice),
       stock: String(product.stock),
@@ -648,6 +858,7 @@ export default function HomePage() {
     const headers = [
       "品番",
       "商品名",
+      "カテゴリー",
       "在庫数",
       "単位",
       "上代",
@@ -661,6 +872,7 @@ export default function HomePage() {
     const rows = products.map((product) => [
       product.code,
       product.name,
+      product.category,
       product.stock,
       product.unit,
       product.retailPrice,
@@ -690,6 +902,97 @@ export default function HomePage() {
 
     setError(null);
     setSuccess("CSVを出力しました。");
+  }
+
+  async function handleImportCsv(file: File | null) {
+    if (!file) return;
+
+    setError(null);
+    setSuccess(null);
+    setCsvImporting(true);
+
+    try {
+      const csvText = await readCsvFile(file);
+      const { rows, errors } = parseProductCsv(csvText);
+      const shouldImport =
+        rows.length > 0 &&
+        window.confirm(
+          `CSVを取り込みます。\n正常行: ${rows.length}件\nエラー行: ${errors.length}件\n正常行のみ登録・更新します。`,
+        );
+
+      if (!shouldImport) {
+        setError(errors.length > 0 ? errors.join("\n") : null);
+        setSuccess("CSV取込をキャンセルしました。");
+        return;
+      }
+
+      const { data: existingRows, error: existingError } = await supabase
+        .from("products")
+        .select("code");
+
+      if (existingError) {
+        setError(`既存商品の確認に失敗しました: ${existingError.message}`);
+        return;
+      }
+
+      const nextCode = buildNextCodeGenerator(
+        (existingRows ?? [])
+          .map((row) => (row.code as string | null) ?? "")
+          .filter(Boolean),
+      );
+      const usedImportCodes = new Set<string>();
+      const duplicateErrors: string[] = [];
+
+      const importRows = rows.flatMap((row) => {
+        const code = row.code || nextCode();
+
+        if (usedImportCodes.has(code)) {
+          duplicateErrors.push(`${row.lineNumber}行目: 品番 ${code} がCSV内で重複しています。`);
+          return [];
+        }
+
+        usedImportCodes.add(code);
+
+        return [
+          {
+            code,
+            name: row.name,
+            category: row.category || null,
+            stock: row.stock,
+            unit: row.unit || null,
+            jodai: row.retailPrice,
+            genka: row.costPrice,
+            location: row.location || null,
+            notes: row.notes || null,
+          },
+        ];
+      });
+
+      if (importRows.length > 0) {
+        const { error: upsertError } = await supabase
+          .from("products")
+          .upsert(importRows, { onConflict: "code" });
+
+        if (upsertError) {
+          setError(`CSV取込に失敗しました: ${upsertError.message}`);
+          return;
+        }
+      }
+
+      await fetchProducts();
+
+      const allErrors = [...errors, ...duplicateErrors];
+      setError(allErrors.length > 0 ? allErrors.join("\n") : null);
+      setSuccess(`CSVを取り込みました。登録・更新: ${importRows.length}件`);
+    } catch (importError) {
+      const message =
+        importError instanceof Error
+          ? importError.message
+          : "不明なエラーが発生しました。";
+      setError(`CSV取込に失敗しました: ${message}`);
+    } finally {
+      setCsvImporting(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -731,6 +1034,7 @@ export default function HomePage() {
       const { error: insertError } = await supabase.from("products").insert({
         code,
         name,
+        category: form.category.trim() || null,
         jodai,
         genka,
         stock,
@@ -807,6 +1111,7 @@ export default function HomePage() {
         .from("products")
         .update({
           name,
+          category: editForm.category.trim() || null,
           jodai,
           genka,
           stock,
@@ -941,9 +1246,9 @@ export default function HomePage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <main className="mx-auto flex max-w-7xl flex-col px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
         {(error || success) && (
-          <div className="mb-6 space-y-3" aria-live="polite">
+          <div className="order-[0] mb-6 space-y-3 whitespace-pre-line" aria-live="polite">
             {error && (
               <div
                 role="alert"
@@ -960,37 +1265,10 @@ export default function HomePage() {
           </div>
         )}
 
-       <section className="mt-6 sm:mt-8" aria-label="商品検索">
-          <label htmlFor="search" className="sr-only">
-            商品を検索
-          </label>
-          <div className="relative">
-            <svg
-              className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              aria-hidden
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-              />
-            </svg>
-            <input
-              id="search"
-              type="search"
-              placeholder="品番・商品名で検索..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="w-full rounded-2xl border border-blue-200 bg-white py-3.5 pl-12 pr-4 text-sm text-slate-800 shadow-sm shadow-blue-100/50 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:text-base"
-            />
-          </div>
-        </section>
- <section aria-label="サマリー">
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <section className="order-[3] mt-6 sm:mt-8" aria-label="サマリー">
+          <div className={`grid grid-cols-2 gap-3 sm:gap-4 ${
+            showCost ? "lg:grid-cols-4" : "lg:grid-cols-3"
+          }`}>
             <StatCard
               label="商品数"
               value={formatNumber(stats.productCount)}
@@ -1001,10 +1279,12 @@ export default function HomePage() {
               value={formatNumber(stats.totalStock)}
               unit="点"
             />
-            <StatCard
-              label="原価総額"
-              value={formatCurrency(stats.totalCost)}
-            />
+            {showCost && (
+              <StatCard
+                label="原価総額"
+                value={formatCurrency(stats.totalCost)}
+              />
+            )}
             <StatCard
               label="上代評価額"
               value={formatCurrency(stats.totalRetailValue)}
@@ -1012,7 +1292,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="mt-6 sm:mt-8" aria-label="商品登録">
+        <section className="order-[4] mt-6 sm:mt-8" aria-label="商品登録">
           <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm shadow-blue-100/40 sm:p-6">
             <h2 className="text-base font-bold text-blue-950 sm:text-lg">
               商品登録
@@ -1036,6 +1316,19 @@ export default function HomePage() {
                   placeholder="例: オーガニックコットンTシャツ"
                   className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   required
+                />
+              </label>
+
+              <label className="block sm:col-span-2 lg:col-span-3">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                  カテゴリー
+                </span>
+                <input
+                  type="text"
+                  value={form.category}
+                  onChange={(event) => updateForm("category", event.target.value)}
+                  placeholder="例: アパレル、食品、消耗品"
+                  className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                 />
               </label>
 
@@ -1165,17 +1458,49 @@ export default function HomePage() {
           </div>
         </section>
 
-        <a
-  href="#product-list"
-  className="block rounded-xl bg-blue-600 text-white text-center py-3 mt-3"
->
-  商品一覧へ
-</a>
-        <section
-  id="product-list"
-  className="mt-6 sm:mt-8"
-  aria-label="商品一覧"
->
+        <section className="order-[1]" aria-label="商品検索">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base font-bold text-blue-950 sm:text-lg">
+              商品検索
+            </h2>
+            <button
+              type="button"
+              onClick={() => setShowCost((current) => !current)}
+              className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50"
+            >
+              {showCost ? "原価を隠す" : "原価を表示"}
+            </button>
+          </div>
+          <label htmlFor="search" className="sr-only">
+            商品を検索
+          </label>
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-blue-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+              />
+            </svg>
+            <input
+              id="search"
+              type="search"
+              placeholder="品番・商品名・カテゴリーで検索..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="w-full rounded-2xl border border-blue-200 bg-white py-3.5 pl-12 pr-4 text-sm text-slate-800 shadow-sm shadow-blue-100/50 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:text-base"
+            />
+          </div>
+        </section>
+
+        <section className="order-[2] mt-6 sm:mt-8" aria-label="商品一覧">
           <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <h2 className="text-base font-bold text-blue-950 sm:text-lg">
@@ -1185,13 +1510,28 @@ export default function HomePage() {
                 {filteredProducts.length} 件
               </span>
             </div>
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50"
-            >
-              CSV出力
-            </button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <label className="inline-flex cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50">
+                {csvImporting ? "CSV取込中..." : "CSV取込"}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  disabled={csvImporting}
+                  onChange={(event) => {
+                    void handleImportCsv(event.target.files?.[0] ?? null);
+                    event.target.value = "";
+                  }}
+                  className="sr-only"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-50"
+              >
+                CSV出力
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -1213,6 +1553,7 @@ export default function HomePage() {
                   <ProductCard
                     key={product.id}
                     product={product}
+                    showCost={showCost}
                     onStockAction={openStockDialog}
                     onEdit={openEditDialog}
                     onDelete={handleDeleteProduct}
@@ -1234,6 +1575,9 @@ export default function HomePage() {
                         <th className="px-5 py-4 font-semibold text-blue-900">
                           商品名
                         </th>
+                        <th className="px-5 py-4 font-semibold text-blue-900">
+                          カテゴリー
+                        </th>
                         <th className="px-5 py-4 text-right font-semibold text-blue-900">
                           在庫数
                         </th>
@@ -1246,12 +1590,16 @@ export default function HomePage() {
                         <th className="px-5 py-4 text-right font-semibold text-blue-900">
                           上代
                         </th>
-                        <th className="px-5 py-4 text-right font-semibold text-blue-900">
-                          原価
-                        </th>
-                        <th className="px-5 py-4 text-right font-semibold text-blue-900">
-                          原価在庫金額
-                        </th>
+                        {showCost && (
+                          <th className="px-5 py-4 text-right font-semibold text-blue-900">
+                            原価
+                          </th>
+                        )}
+                        {showCost && (
+                          <th className="px-5 py-4 text-right font-semibold text-blue-900">
+                            原価在庫金額
+                          </th>
+                        )}
                         <th className="px-5 py-4 text-right font-semibold text-blue-900">
                           上代評価額
                         </th>
@@ -1281,6 +1629,9 @@ export default function HomePage() {
                             <td className="px-5 py-4 font-medium text-slate-800">
                               {product.name}
                             </td>
+                            <td className="px-5 py-4 text-slate-700">
+                              {product.category || "—"}
+                            </td>
                             <td className="px-5 py-4 text-right tabular-nums text-slate-700">
                               {formatNumber(product.stock)}
                             </td>
@@ -1293,12 +1644,16 @@ export default function HomePage() {
                             <td className="px-5 py-4 text-right tabular-nums text-slate-700">
                               {formatCurrency(product.retailPrice)}
                             </td>
-                            <td className="px-5 py-4 text-right tabular-nums text-slate-700">
-                              {formatCurrency(product.costPrice)}
-                            </td>
-                            <td className="px-5 py-4 text-right tabular-nums font-medium text-blue-800">
-                              {formatCurrency(costInventory)}
-                            </td>
+                            {showCost && (
+                              <td className="px-5 py-4 text-right tabular-nums text-slate-700">
+                                {formatCurrency(product.costPrice)}
+                              </td>
+                            )}
+                            {showCost && (
+                              <td className="px-5 py-4 text-right tabular-nums font-medium text-blue-800">
+                                {formatCurrency(costInventory)}
+                              </td>
+                            )}
                             <td className="px-5 py-4 text-right tabular-nums font-medium text-blue-800">
                               {formatCurrency(retailValue)}
                             </td>
@@ -1336,7 +1691,7 @@ export default function HomePage() {
           )}
         </section>
 
-        <section className="mt-6 sm:mt-8" aria-label="入出庫履歴">
+        <section className="order-[5] mt-6 sm:mt-8" aria-label="入出庫履歴">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-base font-bold text-blue-950 sm:text-lg">
               入出庫履歴
@@ -1464,6 +1819,18 @@ export default function HomePage() {
                   onChange={(event) => updateEditForm("name", event.target.value)}
                   className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                   required
+                />
+              </label>
+
+              <label className="block sm:col-span-2">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                  カテゴリー
+                </span>
+                <input
+                  type="text"
+                  value={editForm.category}
+                  onChange={(event) => updateEditForm("category", event.target.value)}
+                  className="w-full rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                 />
               </label>
 
