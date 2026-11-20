@@ -28,13 +28,22 @@ jobs:
           fi
 
           SUPABASE_URL="${SUPABASE_URL%/}"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
 
-          # Read only P0004's id and stock. No INSERT, UPDATE, DELETE, or transaction log.
+          # Read only P0004's id, code, and stock. No INSERT, UPDATE, DELETE, or transaction log.
           curl --fail --silent --show-error \
             --retry 2 --retry-all-errors --retry-delay 5 \
-            --output /dev/null \
+            --output "$response_file" \
             --write-out "P0004 read-only query HTTP %{http_code}\n" \
-            "${SUPABASE_URL}/rest/v1/products?select=id,code,stock&code=eq.P0004&limit=1" \
+            "${SUPABASE_URL}/rest/v1/products?select=id,code,stock&code=eq.P0004&limit=2" \
             -H "apikey: ${SUPABASE_ANON_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
             -H "Accept: application/json"
+
+          if ! jq -e 'type == "array" and length == 1 and .[0].code == "P0004"' "$response_file" > /dev/null; then
+            echo "::error::Expected exactly one readable products row for P0004."
+            exit 1
+          fi
+
+          echo "Confirmed a read-only SELECT returned P0004."
