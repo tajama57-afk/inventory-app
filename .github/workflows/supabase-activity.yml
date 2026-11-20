@@ -1,0 +1,40 @@
+name: Supabase P0004 read-only activity
+
+on:
+  schedule:
+    # Runs three times daily (UTC). These are read-only SELECT requests.
+    - cron: "0 0,8,16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-product:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Read P0004 without changing inventory
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SUPABASE_URL}" || -z "${SUPABASE_ANON_KEY}" ]]; then
+            echo "::error::Set SUPABASE_URL and SUPABASE_ANON_KEY in repository Actions secrets."
+            exit 1
+          fi
+
+          SUPABASE_URL="${SUPABASE_URL%/}"
+
+          # Read only P0004's id and stock. No INSERT, UPDATE, DELETE, or transaction log.
+          curl --fail --silent --show-error \
+            --retry 2 --retry-all-errors --retry-delay 5 \
+            --output /dev/null \
+            --write-out "P0004 read-only query HTTP %{http_code}\n" \
+            "${SUPABASE_URL}/rest/v1/products?select=id,code,stock&code=eq.P0004&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -H "Accept: application/json"
