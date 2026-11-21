@@ -1215,6 +1215,9 @@ export default function HomePage() {
         return;
       }
 
+      // Keep the in-memory image cache in sync after an image edit or removal.
+      productImageCache.set(editingProduct.id, imageUrl);
+
       await fetchProducts();
       setSuccess(`${editingProduct.code} を更新しました。`);
       closeEditDialog();
