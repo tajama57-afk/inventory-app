@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useRef,
 } from "react";
 
 type ProductRow = {
@@ -20,7 +21,7 @@ type ProductRow = {
   location: string | null;
   unit: string | null;
   notes: string | null;
-  image_url: string | null;
+  image_url?: string | null;
 };
 
 type Product = {
@@ -414,13 +415,92 @@ async function generateNextCode(): Promise<string> {
   return `P${String(nextNumber).padStart(4, "0")}`;
 }
 
-function ProductImage({ color, imageUrl }: { color: string; imageUrl?: string }) {
+const productImageCache = new Map<string, string | null>();
+const productImageRequests = new Map<string, Promise<string | null>>();
+
+async function loadProductImage(productId: string): Promise<string | null> {
+  if (productImageCache.has(productId)) {
+    return productImageCache.get(productId) ?? null;
+  }
+
+  const existingRequest = productImageRequests.get(productId);
+  if (existingRequest) return existingRequest;
+
+  const request = (async () => {
+    const { data, error } = await supabase
+      .from("products")
+      .select("image_url")
+      .eq("id", productId)
+      .maybeSingle();
+
+    if (error) throw error;
+    const imageUrl = data?.image_url ?? null;
+    productImageCache.set(productId, imageUrl);
+    return imageUrl;
+  })();
+
+  productImageRequests.set(productId, request);
+  try {
+    return await request;
+  } finally {
+    productImageRequests.delete(productId);
+  }
+}
+
+function ProductImage({ color, productId }: { color: string; productId: string }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [imageUrl, setImageUrl] = useState<string | null>(
+    productImageCache.get(productId) ?? null,
+  );
+
+  useEffect(() => {
+    if (productImageCache.has(productId)) {
+      setImageUrl(productImageCache.get(productId) ?? null);
+      return;
+    }
+
+    const element = containerRef.current;
+    if (!element) return;
+
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const result = await loadProductImage(productId);
+        if (!cancelled) setImageUrl(result);
+      } catch {
+        // Keep the placeholder; image loading must not block the inventory list.
+      }
+    };
+
+    if (typeof IntersectionObserver === "undefined") {
+      void load();
+      return () => { cancelled = true; };
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer.disconnect();
+          void load();
+        }
+      },
+      { rootMargin: "160px" },
+    );
+    observer.observe(element);
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [productId]);
+
   return (
     <div
+      ref={containerRef}
       className={`flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br ${color} shadow-inner sm:h-20 sm:w-20`}
     >
       {imageUrl ? (
-        <img src={imageUrl} alt="商品画像" className="h-full w-full object-cover" />
+        <img src={imageUrl} alt="商品画像" loading="lazy" className="h-full w-full object-cover" />
       ) : (
       <svg
         className="h-8 w-8 text-blue-500/70 sm:h-10 sm:w-10"
@@ -513,7 +593,7 @@ function ProductCard({
   return (
     <article className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm shadow-blue-100/40 lg:hidden">
       <div className="flex gap-4">
-        <ProductImage color={product.imageColor} imageUrl={product.imageUrl} />
+        <ProductImage color={product.imageColor} productId={product.id} />
         <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold text-blue-600">{product.code}</p>
           <h3 className="mt-0.5 truncate text-base font-bold text-slate-800">
@@ -619,7 +699,7 @@ export default function HomePage() {
 
     const { data, error: fetchError } = await supabase
       .from("products")
-      .select("id, code, name, category, jodai, genka, stock, location, unit, notes, image_url")
+      .select("id, code, name, category, jodai, genka, stock, location, unit, notes")
       .order("code", { ascending: true });
 
     if (fetchError) {
@@ -707,10 +787,9 @@ export default function HomePage() {
     setEditForm((current) => ({ ...current, [field]: value }));
   }
 
-  function openEditDialog(product: Product) {
+  async function openEditDialog(product: Product) {
     setError(null);
     setSuccess(null);
-    setEditingProduct(product);
     setEditForm({
       name: product.name,
       category: product.category,
@@ -722,7 +801,16 @@ export default function HomePage() {
       notes: product.notes,
     });
     setEditImageFile(null);
-    setEditImagePreview(product.imageUrl || null);
+    setEditImagePreview(null);
+
+    try {
+      const imageUrl = await loadProductImage(product.id);
+      setEditingProduct({ ...product, imageUrl: imageUrl ?? "" });
+      setEditImagePreview(imageUrl);
+    } catch {
+      setEditingProduct({ ...product, imageUrl: "" });
+      setError("商品画像を読み込めませんでした。画像以外の編集は続けられます。");
+    }
   }
 
   function closeEditDialog() {
@@ -1126,6 +1214,9 @@ export default function HomePage() {
         setError(`商品の更新に失敗しました: ${updateError.message}`);
         return;
       }
+
+      // Keep the in-memory image cache in sync after an image edit or removal.
+      productImageCache.set(editingProduct.id, imageUrl);
 
       await fetchProducts();
       setSuccess(`${editingProduct.code} を更新しました。`);
@@ -1621,7 +1712,7 @@ export default function HomePage() {
                             className="transition-colors hover:bg-blue-50/40"
                           >
                             <td className="px-5 py-4">
-                              <ProductImage color={product.imageColor} imageUrl={product.imageUrl} />
+                              <ProductImage color={product.imageColor} productId={product.id} />
                             </td>
                             <td className="px-5 py-4 font-medium text-blue-700">
                               {product.code}
