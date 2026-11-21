@@ -787,10 +787,9 @@ export default function HomePage() {
     setEditForm((current) => ({ ...current, [field]: value }));
   }
 
-  function openEditDialog(product: Product) {
+  async function openEditDialog(product: Product) {
     setError(null);
     setSuccess(null);
-    setEditingProduct(product);
     setEditForm({
       name: product.name,
       category: product.category,
@@ -803,17 +802,15 @@ export default function HomePage() {
     });
     setEditImageFile(null);
     setEditImagePreview(null);
-    setEditingProduct({ ...product, imageUrl: "" });
-    void loadProductImage(product.id)
-      .then((imageUrl) => {
-        setEditingProduct((current) =>
-          current?.id === product.id ? { ...current, imageUrl: imageUrl ?? "" } : current,
-        );
-        setEditImagePreview(imageUrl);
-      })
-      .catch(() => {
-        setError("商品画像を読み込めませんでした。画像以外の編集は続けられます。");
-      });
+
+    try {
+      const imageUrl = await loadProductImage(product.id);
+      setEditingProduct({ ...product, imageUrl: imageUrl ?? "" });
+      setEditImagePreview(imageUrl);
+    } catch {
+      setEditingProduct({ ...product, imageUrl: "" });
+      setError("商品画像を読み込めませんでした。画像以外の編集は続けられます。");
+    }
   }
 
   function closeEditDialog() {
